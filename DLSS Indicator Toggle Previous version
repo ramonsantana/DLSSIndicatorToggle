@@ -1,0 +1,145 @@
+import tkinter as tk
+import ctypes
+import winreg
+import sys
+import threading
+import time
+
+# Dark mode color scheme
+dark_bg = "#2D2D2D"  # Background color
+dark_fg = "#FFFFFF"  # Foreground (text) color
+button_hover_color = "#3D3D3D"  # Color for button hover effect
+font_style = ("Helvetica", 14)
+
+# Function to add a border and hover effect to buttons
+def add_button_border(button):
+    button.config(
+        relief="solid",  # Set the relief to "solid" for a visible border
+        borderwidth=2,   # Border width
+        font=font_style,
+        bg=dark_bg,
+        fg=dark_fg,
+    )
+    button.bind("<Enter>", lambda e: button.config(bg=button_hover_color))
+    button.bind("<Leave>", lambda e: button.config(bg=dark_bg))
+
+# Custom draggable window class
+class DraggableWindow(tk.Tk):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.title("DLSS Indicator Toggle")
+        self.geometry("400x260")  # Start with a size
+
+        # Configure window background and border
+        self.configure(bg=dark_bg)
+        self.update_idletasks()
+        self.overrideredirect(False)  # Show window border
+
+        # Bind mouse events for dragging
+        self.bind("<ButtonPress-1>", self.start_drag)
+        self.bind("<ButtonRelease-1>", self.stop_drag)
+        self.bind("<B1-Motion>", self.on_drag)
+
+        self.drag_start_x = 0
+        self.drag_start_y = 0
+
+        self.fade_thread = None
+        self.fade_alpha = 1.0
+
+    def start_drag(self, event):
+        self.drag_start_x = event.x
+        self.drag_start_y = event.y
+
+    def stop_drag(self, event):
+        self.drag_start_x = 0
+        self.drag_start_y = 0
+
+    def on_drag(self, event):
+        x = self.winfo_x() + (event.x - self.drag_start_x)
+        y = self.winfo_y() + (event.y - self.drag_start_y)
+        self.geometry(f"+{x}+{y}")
+
+    def fade_out(self):
+        self.fade_thread = threading.Thread(target=self._fade_out)
+        self.fade_thread.start()
+
+    def _fade_out(self):
+        for _ in range(20):
+            time.sleep(0.05)
+            self.fade_alpha -= 0.05
+            self.attributes("-alpha", self.fade_alpha)
+        self.destroy()
+
+# Function to check if the script is running with administrator privileges
+def is_admin():
+    try:
+        return ctypes.windll.shell32.IsUserAnAdmin()
+    except:
+        return False
+
+# Function to get the current state of the DLSS Indicator from the Windows Registry
+def get_dlss_indicator_state():
+    try:
+        key_path = r"SOFTWARE\NVIDIA Corporation\Global\NGXCore"
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path, 0, winreg.KEY_READ) as key:
+            return winreg.QueryValueEx(key, "ShowDlssIndicator")[0]
+    except Exception as e:
+        ctypes.windll.user32.MessageBoxW(0, f"Error reading DLSS Indicator state: {str(e)}", "DLSS Indicator Toggle Error", 0)
+        return 0  # Default to "Off"
+
+# Function to toggle the DLSS Indicator state in the Windows Registry
+def toggle_dlss_indicator():
+    try:
+        key_path = r"SOFTWARE\NVIDIA Corporation\Global\NGXCore"
+        current_state = get_dlss_indicator_state()
+        new_state = 0 if current_state == 0x400 else 0x400  # Toggle between "On" (0x400) and "Off" (0)
+
+        # Open the registry key for writing
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path, 0, winreg.KEY_WRITE) as key:
+            winreg.SetValueEx(key, "ShowDlssIndicator", 0, winreg.REG_DWORD, new_state)
+            update_title_label(new_state)
+
+    except Exception as e:
+        ctypes.windll.user32.MessageBoxW(0, f"Failed to toggle DLSS Indicator: {str(e)}", "DLSS Indicator Toggle Error", 0)
+
+# Function to close the application with a fade-out effect
+def close_app():
+    app.fade_out()
+    app.after(1000, app.quit)  # Wait for 1000 milliseconds (1 second) before quitting
+
+# Function to update the title label based on the DLSS Indicator state
+def update_title_label(new_value):
+    indicator_label.config(text=f"DLSS Indicator is {'On' if new_value == 0x400 else 'Off'}")
+
+# Check if the script is running with administrator privileges
+if is_admin():
+    app = DraggableWindow()
+
+    # Create a frame to contain the UI elements
+    main_frame = tk.Frame(app, bg=dark_bg)
+    main_frame.pack()
+
+    # Create the UI elements with custom styles
+    title_label = tk.Label(main_frame, text="DLSS Indicator On/Off", font=("Helvetica", 24), bg=dark_bg, fg=dark_fg)
+    toggle_button = tk.Button(main_frame, text="Toggle", command=toggle_dlss_indicator, justify="center")
+    indicator_label = tk.Label(main_frame, text="", font=("Helvetica", 18), bg=dark_bg, fg=dark_fg)
+    close_button = tk.Button(main_frame, text="Close", command=close_app, justify="center")
+
+    # Configure buttons with visible borders and hover effect
+    add_button_border(toggle_button)
+    add_button_border(close_button)
+
+    # Arrange the UI elements in the frame
+    title_label.pack(pady=20)
+    toggle_button.pack(pady=10)
+    indicator_label.pack()
+    close_button.pack(pady=10)
+
+    # Determine and display the initial state of DLSS Indicator
+    initial_state = get_dlss_indicator_state()
+    update_title_label(initial_state)
+
+    app.mainloop()
+else:
+    # Relaunch the script with admin privileges
+    ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, " ".join(sys.argv), None, 1)
